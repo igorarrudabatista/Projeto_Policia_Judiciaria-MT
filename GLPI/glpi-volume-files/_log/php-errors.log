@@ -1,0 +1,9 @@
+[2022-06-15 19:37:31] glpiphplog.WARNING:   *** PHP Warning (2): mysqli::real_connect(): (HY000/2002): Connection refused in /var/www/html/inc/dbmysql.class.php at line 185
+  Backtrace :
+  inc/dbmysql.class.php:185                          mysqli->real_connect()
+  inc/dbmysql.class.php:147                          DBmysql->connect()
+  inc/console/application.class.php:313              DBmysql->__construct()
+  inc/console/application.class.php:104              Glpi\Console\Application->initDb()
+  bin/console:101                                    Glpi\Console\Application->__construct()
+  
+[2022-06-15 21:55:08] glpiphplog.WARNING: Test logger  

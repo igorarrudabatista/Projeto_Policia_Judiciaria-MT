@@ -1,0 +1,394 @@
+# Autor: Igor de Arruda Batista
+# GOVERNO DO ESTADO DE MATO GROSSO
+# SECRETARIA DE ESTADO DE SEGURANÇA PÚBLICA
+# POLÍCIA JUDICIÁRIA CIVIL
+# CONTROLADORIA GERAL DO ESTADO
+
+########################################################################
+# 1) Montar um ambiente utilizando o Docker Compose, tendo como sistema operacional
+# base qualquer distribuição Linux, de modo a levantar os seguintes servidores:
+# a) Firewall
+# b) Cluster PostgreSQL
+# c) GLPI
+# d) Proxy Reverso apontando para todas as aplicações.
+# e) Web_Server_01 (Apache ou Nginx)
+# f) Web_Server_02 ( Wildfly ou tomcat)
+# g) Bacula Backup + Baculum
+# h) Graylog
+# i) Zabbix
+# j) Samba4-AD
+# 2) Preferencialmente, utilizar como banco de dados padrão para os sistemas o
+# PostgreSQL.
+# 3) Utilizar no mínimo 3 (três) VLAN.
+# 4) Usar as regras que julgar pertinente considerando políticas de segurança e
+# performance.
+# 5) Realizar as configurações necessárias para que um computador externo acesse:
+# a) www.lab.local/pg01 - página contida no Web_Server_01
+# b) www.lab.local/pg02 - página contida no Web_Server_02
+# c) outros.
+# Considere o seguinte:
+# a) O Web_Server_01 deverá exibir uma página com o número do CPF.
+# b) O Web_Server_02 deverá exibir uma página com o e-mail.
+# 6) Ativar o monitoramento dos serviços e dispositivos que julgar necessário.
+
+########################################################################
+
+
+version: '3.9'
+services:
+
+        firewall:
+                privileged: true
+                build: ./FIREWALL
+                image: ubuntu
+                container_name: firewall
+
+                networks:
+                         - vlan20
+                         - vlan30
+                         - vlan40
+                         - proxy
+
+                
+                tty: true
+
+######################## WEB01 ########################
+        web01:
+          container_name: web01
+          image: nginx
+          build: ./web01
+          networks:
+            - vlan20
+            #- proxy
+######################## END ########################
+
+######################## WEB02 ########################
+        web02:
+          container_name: web02
+          image: tomcat:8.0-alpine
+          build: ./web02
+          networks:
+            - vlan20
+           # - proxy
+######################## END ########################
+
+######################## PROXY REVERSO ########################
+        proxy:
+          image: nginx
+          container_name: proxy
+          volumes:
+                  - ./nginx.conf:/etc/nginx/nginx.conf
+          build: ./PROXY
+          ports:
+                  - 80:80
+          # depends_on:
+          #         - web01
+          #         - web02
+          networks:
+                #  - proxy
+                  - vlan20
+                  - vlan30
+######################## END ########################
+
+######################## GLPI ########################
+
+        mariadb: 
+            image: fametec/glpi:9.5.6-mariadb
+            container_name: mariadb_glpi
+            restart: unless-stopped
+            volumes: 
+                    - ./GLPI/mariadb-glpi-volume:/var/lib/mysql:rw
+            environment: 
+              MYSQL_DATABASE: glpi
+              MYSQL_USER: glpi-user 
+              MYSQL_PASSWORD: glpi-pass 
+              MYSQL_RANDOM_ROOT_PASSWORD: 1 
+            ports: 
+              - 3306:3306
+         
+            networks:
+                      - vlan40
+                      - vlan20
+                    #  - proxy
+
+
+      
+        glpi:
+            image: fametec/glpi:9.5.6
+            container_name: glpi
+            build: ./GLPI
+            restart: unless-stopped
+            volumes: 
+                   - ./GLPI/glpi-volume-files:/var/www/html/files:rw
+                   - ./GLPI/glpi-volume-plugins:/var/www/html/plugins:rw
+                   - ./GLPI/glpi-volume-config:/var/www/html/config:rw
+            environment: 
+              GLPI_LANG: pt_BR
+              MARIADB_HOST: mariadb
+              MARIADB_PORT: 3306
+              MARIADB_DATABASE: glpi
+              MARIADB_USER: glpi-user
+              MARIADB_PASSWORD: glpi-pass
+              VERSION: "9.5.6"
+              PLUGINS: "all"
+            depends_on: 
+                        - mariadb
+                    
+            networks:
+                        - vlan40
+                        - vlan20
+                     #   - proxy
+       
+######################## END ########################
+
+######################## POSTGRESQL ########################         
+        postgres:
+           image: postgres
+           container_name: postgres
+           restart: always
+           environment:
+             POSTGRES_USER: zabbix
+             POSTGRES_PASSWORD: zabbix
+             POSTGRES_DB: zabbix
+           networks:
+                  # - proxy
+                   - vlan40
+                   - vlan30
+######################## END ########################
+
+        
+######################## ZABBIX ########################
+        zabbix-server:
+          image: zabbix/zabbix-server-pgsql
+          container_name: zabbix-server
+          restart: always
+          environment:
+            DB_SERVER_HOST: postgres
+            POSTGRES_USER: zabbix
+            POSTGRES_PASSWORD: zabbix
+            POSTGRES_DB: zabbix
+          depends_on:
+            - postgres
+          networks:
+           # - proxy
+            - vlan30
+            
+
+        #Zabbix-Web 
+        zabbix-web:
+            image: zabbix/zabbix-web-nginx-pgsql
+            container_name: zabbix-web
+            restart: always
+            environment:
+              ZBX_SERVER_HOST: zabbix-server
+              DB_SERVER_HOST: postgres
+              POSTGRES_USER: zabbix
+              POSTGRES_PASSWORD: zabbix
+              POSTGRES_DB: zabbix
+            depends_on:
+              - postgres
+              - zabbix-server
+            networks:
+             # - proxy
+              - vlan30
+              - vlan20
+######################## END ########################
+
+              
+
+######################## SAMABA AD ########################
+        samba:
+           image: imunew/samba4-ad-dc
+           container_name: samba_AD
+           privileged: true
+           environment:
+                       - SAMBA_DC_REALM=lab.local.PJC
+                       - SAMBA_DC_DOMAIN=lab.local
+                       - SAMBA_DC_ADMIN_PASSWD=!@12345678910!!@@2022
+                       - SAMBA_DC_DNS_BACKEND=SAMBA_INTERNAL
+           ports:
+                       - 53:53
+                       - 53:53/udp
+                       - 88:88
+                       - 88:88/udp
+                       - 135:135
+                       - 139:139
+                       - 389:389
+                       - 389:389/udp
+                       #- 445:445 # Esta porta geralmente dá erro por possivelmente já estar sendo utilizando pelo Hyper-V ou WSL
+                       - 464:464
+                       - 464:464/udp
+                       - 636:636
+                       - 3268-3269:3268-3269
+           networks:
+                      - proxy
+                   #   - vlan20
+######################## END ########################
+
+######################## GRAYLOG ########################          
+        mongo:
+            image: mongo:4.2
+            container_name: mongo_graylog
+            networks:
+                #  - proxy
+                  - vlan40
+
+        
+        elasticsearch:
+          image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+          container_name: elasticsearch_graylog
+          environment:
+                  - http.host=0.0.0.0
+                  - transport.host=localhost
+                  - network.host=0.0.0.0
+                  - "ES_JAVA_OPTS=-Dlog4j2.formatMsgNoLookups=true -Xms512m -Xmx512m"
+          ulimits:
+            memlock:
+              soft: -1
+              hard: -1
+          deploy:
+            resources:
+              limits:
+                memory: 1g
+          networks:
+                 # - proxy
+                  - vlan40
+
+    
+        graylog:
+            image: graylog/graylog:4.2
+            container_name: graylog
+           # build: ./GRAYLOG
+            environment:
+                  - GRAYLOG_PASSWORD_SECRET=Senha@@PJC@@12345678@
+                  - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+                  - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+            entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+            restart: always
+            depends_on:
+                  - mongo
+                  - elasticsearch
+            ports:
+                  
+                  # Syslog TCP
+                  - 1514:1514
+                  # Syslog UDP
+                  - 1514:1514/udp
+                  # GELF TCP
+                  - 12201:12201
+                  # GELF UDP
+                  - 12201:12201/udp    
+            networks:
+                #  - proxy
+                  - vlan20    
+######################## END ########################
+
+######################## BACULA + BACULUM ########################
+                              
+        bacula-dir:
+          image: fametec/bacula-director:11.0.5
+          container_name: bacula-dir
+
+          restart: unless-stopped
+          # volumes:
+          #    - ./etc:/opt/bacula/etc/bacula-dir.conf:ro
+          depends_on: 
+            - postgres      
+          # ports:
+          #   - 9101:9101
+          networks:
+                    # # - proxy
+                     - vlan30
+      #
+        bacula-sd:
+          image: fametec/bacula-storage:11.0.5
+          container_name: bacula-sd
+          restart: unless-stopped
+          depends_on:
+            - bacula-dir
+            - postgres
+          # volumes:
+          #   - ./etc:/opt/bacula/etc:ro
+          # ports:
+          #   - 9103:9103
+          networks:
+                    #  - proxy
+                     - vlan30
+      #
+        bacula-fd:
+          image: fametec/bacula-client:11.0.5
+          container_name: bacula-fd
+          restart: unless-stopped
+          depends_on:
+            - bacula-sd
+            - bacula-dir
+            - postgres
+          # volumes:
+          #   - ./etc:/opt/bacula/etc:ro
+          # ports:
+          #   - 9102:9102
+          networks:
+                    # - proxy
+                     - vlan30
+      #
+        baculum-api:
+          image: fametec/baculum-api:11.0.5
+          container_name: bacula-api
+          restart: unless-stopped
+          depends_on: 
+            - postgres
+            - bacula-dir
+          networks:
+                    # - proxy
+                     - vlan30
+      #
+        baculum-web:
+          image: fametec/baculum-web:11.0.5
+          container_name: bacula-web
+          restart: unless-stopped
+          depends_on: 
+            - baculum-api
+          networks:
+                   #  - proxy
+                     - vlan20
+                     - vlan30
+######################## END ########################
+
+
+
+######################## NETWORKS ########################
+
+networks:
+  proxy:
+    driver: bridge
+
+  vlan20:
+    name: vlan20
+    driver: macvlan
+    driver_opts:
+      parent: eth0.20 # Windows
+      #parent: enp2s0.20 # Linux
+    ipam:
+      config:
+        - subnet: 192.168.20.0/24
+          gateway: 192.168.20.1
+  vlan30:
+    name: vlan30
+    driver: macvlan
+    driver_opts:
+      parent: eth0.30 # windows
+      #parent: enp2s0.30 # Linux
+    ipam:
+      config:
+        - subnet: 192.168.30.0/24
+          gateway: 192.168.30.1
+  vlan40:
+    name: vlan40
+    driver: macvlan
+    driver_opts:
+      parent: eth0.40 # Windows
+      #parent: enp2s0.40 # Linux
+    ipam:
+      config:
+        - subnet: 192.168.40.0/24
+          gateway: 192.168.40.1
